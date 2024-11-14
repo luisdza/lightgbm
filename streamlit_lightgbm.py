@@ -28,6 +28,14 @@ if 'target_column' not in st.session_state:
     st.session_state.target_column = None
 if 'clean_data' not in st.session_state:
     st.session_state.clean_data = False
+if 'X_train' not in st.session_state:
+    st.session_state.X_train = None
+if 'X_test' not in st.session_state:
+    st.session_state.X_test = None
+if 'y_train' not in st.session_state:
+    st.session_state.y_train = None
+if 'y_test' not in st.session_state:
+    st.session_state.y_test = None
 
 # Set Streamlit page configuration
 st.set_page_config(
@@ -102,6 +110,10 @@ if st.button("Load Example Dataset"):
             y_train = y_train.reset_index(drop=True)
             st.session_state.data = pd.concat([X_train, y_train], axis=1)
             st.session_state.SAMPLE_DATASET_LOADED = True
+            st.session_state.X_train = X_train
+            st.session_state.X_test = X_test
+            st.session_state.y_train = y_train
+            st.session_state.y_test = y_test
             st.write(
                 "Dataset loaded: X_train shape:", X_train.shape,
                 "y_train shape:", y_train.shape
@@ -164,13 +176,17 @@ if st.session_state.data is not None or st.session_state.SAMPLE_DATASET_LOADED:
     st.session_state.target_column = st.sidebar.selectbox(
         "Select the target column",
         options=st.session_state.data.columns,
-        index=st.session_state.data.columns.get_loc(st.session_state.target_column) if st.session_state.target_column in st.session_state.data.columns else 0,
+        index=st.session_state.data.columns.get_loc(
+            st.session_state.target_column
+        ) if st.session_state.target_column in st.session_state.data.columns else 0,
         key='target_column_select'
     )
     st.session_state.feature_columns = st.sidebar.multiselect(
         "Select the feature columns",
         options=st.session_state.data.columns,
-        default=list(st.session_state.data.columns.drop(st.session_state.target_column)),
+        default=list(st.session_state.data.columns.drop(
+            st.session_state.target_column
+        )),
         key='feature_columns_select'
     )
     if len(st.session_state.feature_columns) == 0:
@@ -228,7 +244,21 @@ if st.session_state.data is not None or st.session_state.SAMPLE_DATASET_LOADED:
             data_after = X.shape[0]
             st.write(f"Removed {data_before - data_after} rows with NaN values.")
 
-        if not st.session_state.SAMPLE_DATASET_LOADED:
+        # Split data into training and validation sets
+        if st.session_state.SAMPLE_DATASET_LOADED:
+            # Use the pre-split sample dataset
+            X_train = st.session_state.X_train
+            X_test = st.session_state.X_test
+            y_train = st.session_state.y_train
+            y_test = st.session_state.y_test
+            st.write(
+                "Using sample dataset: X_train shape:", X_train.shape,
+                "X_test shape:", X_test.shape,
+                "y_train shape:", y_train.shape,
+                "y_test shape:", y_test.shape
+            )
+        else:
+            # Split the uploaded dataset
             X_train, X_test, y_train, y_test = train_test_split(
                 X, y, test_size=0.2, random_state=42
             )
@@ -238,32 +268,22 @@ if st.session_state.data is not None or st.session_state.SAMPLE_DATASET_LOADED:
                 "y_train shape:", y_train.shape,
                 "y_test shape:", y_test.shape
             )
-        else:
-            X_train = X
-            y_train = y
-            X_test, y_test = None, None
 
         if (
             X_train.isnull().values.any() or
             y_train.isnull().values.any()
         ):
             st.error(
-                "The dataset contains NaN or missing values after cleaning. "
+                "The training data contains NaN or missing values after cleaning. "
                 "Please check your data."
             )
-            st.write("Error: Dataset contains NaN or missing values.")
+            st.write("Error: Training data contains NaN or missing values.")
             st.stop()
 
-        try:
-            train_data = lgb.Dataset(X_train, label=y_train)
-            test_data = None
-            if X_test is not None and y_test is not None:
-                test_data = lgb.Dataset(X_test, label=y_test, reference=train_data)
-            st.write("LightGBM datasets prepared.")
-        except ValueError as e:
-            st.error(f"Error in dataset preparation: {e}")
-            st.write("Error in dataset preparation:", e)
-            st.stop()
+        # Prepare LightGBM datasets
+        train_data = lgb.Dataset(X_train, label=y_train)
+        valid_data = lgb.Dataset(X_test, label=y_test, reference=train_data)
+        st.write("LightGBM datasets prepared.")
 
         objective, metric = get_objective_and_metric(y)
         params = {
@@ -278,14 +298,14 @@ if st.session_state.data is not None or st.session_state.SAMPLE_DATASET_LOADED:
 
         with st.spinner('Training the model...'):
             try:
-                valid_sets = [train_data]
-                if test_data is not None:
-                    valid_sets.append(test_data)
+                valid_sets = [train_data, valid_data]
+                valid_names = ['train', 'valid']
                 model = lgb.train(
                     params,
                     train_data,
                     num_boost_round=n_estimators,
                     valid_sets=valid_sets,
+                    valid_names=valid_names,
                     callbacks=[
                         lgb.log_evaluation(period=10),
                         lgb.early_stopping(stopping_rounds=early_stopping_rounds)
@@ -297,20 +317,18 @@ if st.session_state.data is not None or st.session_state.SAMPLE_DATASET_LOADED:
                 st.write("Error during model training:", e)
                 st.stop()
 
-        if X_test is not None:
-            y_pred = model.predict(X_test, num_iteration=model.best_iteration)
-            st.write("Predictions made.")
-            if pd.api.types.is_float_dtype(y):
-                rmse = mean_squared_error(y_test, y_pred, squared=False)
-                st.success(f"Model RMSE: {rmse:.4f}")
-                st.write("Model RMSE:", rmse)
-            else:
-                y_pred_binary = (y_pred >= default_threshold).astype(int)
-                accuracy = accuracy_score(y_test, y_pred_binary)
-                st.success(f"Model Accuracy: {accuracy:.4f}")
-                st.write("Model Accuracy:", accuracy)
+        # Predictions and evaluation
+        y_pred = model.predict(X_test, num_iteration=model.best_iteration)
+        st.write("Predictions made.")
+        if pd.api.types.is_float_dtype(y):
+            rmse = mean_squared_error(y_test, y_pred, squared=False)
+            st.success(f"Model RMSE on test set: {rmse:.4f}")
+            st.write("Model RMSE on test set:", rmse)
         else:
-            st.write("Test data not available for evaluation.")
+            y_pred_binary = (y_pred >= default_threshold).astype(int)
+            accuracy = accuracy_score(y_test, y_pred_binary)
+            st.success(f"Model Accuracy on test set: {accuracy:.4f}")
+            st.write("Model Accuracy on test set:", accuracy)
 
         feature_importance = model.feature_importance(
             importance_type=importance_type
@@ -329,9 +347,7 @@ if st.session_state.data is not None or st.session_state.SAMPLE_DATASET_LOADED:
                 x='Importance', y='Feature',
                 data=feature_importance_df,
                 ax=ax,
-                hue='Feature',
-                palette='coolwarm',
-                legend=False
+                palette='coolwarm'
             )
             ax.set_title('Feature Importance')
             ax.set_xlabel('Feature Importance')
@@ -344,8 +360,8 @@ if st.session_state.data is not None or st.session_state.SAMPLE_DATASET_LOADED:
                 "Please check your dataset and model parameters."
             )
             st.write("Warning: No important features identified.")
-    else:
-        st.info(
-            "Please configure the parameters and click 'Train Model' to proceed."
-        )
-        st.write("Model training not initiated. Awaiting user input.")
+else:
+    st.info(
+        "Please configure the parameters and click 'Train Model' to proceed."
+    )
+    st.write("Model training not initiated. Awaiting user input.")
