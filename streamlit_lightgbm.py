@@ -126,6 +126,7 @@ if st.button("Load Example Dataset"):
             st.write("Error loading dataset:", e)
             st.stop()
 
+# Checkbox to show full dataset
 st.checkbox(
     "Show full dataset",
     value=st.session_state.show_full_dataset,
@@ -173,6 +174,7 @@ if st.session_state.data is not None or st.session_state.SAMPLE_DATASET_LOADED:
     # Update clean_data state
     st.session_state.clean_data = st.session_state.clean_data_checkbox
 
+    # Select target column
     st.session_state.target_column = st.sidebar.selectbox(
         "Select the target column",
         options=st.session_state.data.columns,
@@ -181,6 +183,8 @@ if st.session_state.data is not None or st.session_state.SAMPLE_DATASET_LOADED:
         ) if st.session_state.target_column in st.session_state.data.columns else 0,
         key='target_column_select'
     )
+
+    # Select feature columns
     st.session_state.feature_columns = st.sidebar.multiselect(
         "Select the feature columns",
         options=st.session_state.data.columns,
@@ -204,6 +208,7 @@ if st.session_state.data is not None or st.session_state.SAMPLE_DATASET_LOADED:
         else:
             return 'binary', 'binary_error'
 
+    # LightGBM parameters configuration
     st.sidebar.header("LightGBM Parameters Configuration")
     learning_rate = st.sidebar.slider("Learning Rate", 0.01, 0.5, 0.05)
     num_leaves = st.sidebar.slider("Number of Leaves", 10, 100, 31)
@@ -231,6 +236,7 @@ if st.session_state.data is not None or st.session_state.SAMPLE_DATASET_LOADED:
             st.error("No dataset loaded. Please upload a dataset or load the example dataset.")
             st.stop()
 
+        # Extract features and target
         X = st.session_state.data[st.session_state.feature_columns]
         y = st.session_state.data[st.session_state.target_column]
         st.write("Training data shapes: X=", X.shape, ", y=", y.shape)
@@ -269,6 +275,7 @@ if st.session_state.data is not None or st.session_state.SAMPLE_DATASET_LOADED:
                 "y_test shape:", y_test.shape
             )
 
+        # Check for NaN values in training data
         if (
             X_train.isnull().values.any() or
             y_train.isnull().values.any()
@@ -285,6 +292,7 @@ if st.session_state.data is not None or st.session_state.SAMPLE_DATASET_LOADED:
         valid_data = lgb.Dataset(X_test, label=y_test, reference=train_data)
         st.write("LightGBM datasets prepared.")
 
+        # Get objective and metric
         objective, metric = get_objective_and_metric(y)
         params = {
             'objective': objective,
@@ -296,6 +304,7 @@ if st.session_state.data is not None or st.session_state.SAMPLE_DATASET_LOADED:
         }
         st.write("LightGBM parameters:", params)
 
+        # Train the model
         with st.spinner('Training the model...'):
             try:
                 valid_sets = [train_data, valid_data]
@@ -330,6 +339,7 @@ if st.session_state.data is not None or st.session_state.SAMPLE_DATASET_LOADED:
             st.success(f"Model Accuracy on test set: {accuracy:.4f}")
             st.write("Model Accuracy on test set:", accuracy)
 
+        # Feature importance
         feature_importance = model.feature_importance(
             importance_type=importance_type
         )
@@ -340,6 +350,7 @@ if st.session_state.data is not None or st.session_state.SAMPLE_DATASET_LOADED:
         st.dataframe(feature_importance_df, use_container_width=True)
         st.write("Feature importance calculated.")
 
+        # Plot feature importance
         if not feature_importance_df.empty:
             st.write("### Feature Importance Chart")
             fig, ax = plt.subplots()
